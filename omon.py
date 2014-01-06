@@ -3,8 +3,8 @@
 #	python version > 2.2
 #	kernel > 2.6.18
 #	Directory:/home/oracle/	
-#
-#
+#	Oracle client
+#	cx_Oracle when need persistent connection
 
 import sys,os 
 import fcntl
@@ -15,6 +15,7 @@ import socket
 import struct
 import array
 import subprocess
+import cx_Oracle
 from datetime import datetime
 
 VERSION 	= '0.1'
@@ -26,7 +27,7 @@ ORACLE_PLUS	= 'oracle_plus.log'
 ORACLE_RAW	= 'oracle_raw.log'
 ORACLE_FLK	= '.oracle_lock.flk'
 MAXSIZE		= 52428800
-SID			= None
+ORACLE_SID	= None
 ORACLE_HOME	= None
 
 def chkEnv():
@@ -40,13 +41,6 @@ def chkEnv():
 		print >>sys.stderr,"Error: Linux kernel 2.6 or later required!"
 		sys.exit(1)
 
-def _initOracleEnv():
-	global ORACLE_CORE,ORACLE_PLUS,ORACLE_RAW,ORACLE_FLK
-	ORACLE_CORE 	= ORACLE_CORE + '_' + SID
-	ORACLE_PLUS		= ORACLE_PLUS + '_' + SID
-	ORACLE_RAW 		= ORACLE_RAW + '_' + SID
-	ORACLE_FLK 		= ORACLE_FLK + '_' + SID
-
 def _init_path(path):
 	try:
 		if not os.path.exists(path):
@@ -55,6 +49,30 @@ def _init_path(path):
 	except Exception,e:
 		print >>sys.stderr,"Error: " +str(e)
 		sys.exit(1)
+
+def _initOracleEnv():
+	global ORACLE_CORE,ORACLE_PLUS,ORACLE_RAW,ORACLE_FLK
+	global ORACLE_HOME,ORACLE_SID
+	global sqlArray
+
+	ORACLE_HOME	= os.environ.get("ORACLE_HOME")
+	ORACLE_SID	= os.environ.get("ORACLE_SID")
+	if ORACLE_HOME is None or ORACLE_SID is None:
+		print >>sys.stderr,"Error: ORACLE_HOME and ORACLE_SID required!"
+		sys.exit(1)
+	
+	ORACLE_CORE 	= ORACLE_CORE + '_' + ORACLE_SID
+	ORACLE_PLUS		= ORACLE_PLUS + '_' + ORACLE_SID
+	ORACLE_RAW 		= ORACLE_RAW + '_' + ORACLE_SID
+	ORACLE_FLK 		= ORACLE_FLK + '_' + ORACLE_SID
+
+	sql_active	="select 'Active',count(*) from v$session where status='ACTIVE' and type='USER'"
+	sql_session ="select 'Session',count(*) from v$session"
+	sql_enqueue ="select 'Enqueue',count(*) from v$session_wait where event like 'enq:%'"
+	sql_logfile	="select 'logf',count(*) from v$log where ARCHIVED='YES' and STATUS='INACTIVE'"
+	sql_stat	="select decode(name,'logons cumulative','Log', 'user commits','Comm', 'execute count','Exec','user rollbacks','Roll', 'cleanouts and rollbacks - consistent read gets','Clean', 'redo size','Redo', 'redo writes','Rwrt', 'redo synch writes','Rsyn', 'redo synch time','Rrst', 'sorts (rows)','Sort', 'parse count (hard)','Parse', 'db block gets','Bget', 'consistent gets','Cget', 'physical read IO requests','Read', 'physical write IO requests','Writ', 'bytes sent via SQL*Net to client','Send', 'bytes received via SQL*Net from client','Recv', 'SQL*Net roundtrips to/from client','Trip'),value from v$sysstat where  name in('logons cumulative', 'user commits', 'user rollbacks', 'cleanouts and rollbacks - consistent read gets', 'redo size', 'redo writes', 'redo synch writes', 'redo synch time', 'sorts (rows)', 'parse count (hard)', 'db block gets', 'consistent gets', 'physical read IO requests', 'physical write IO requests', 'bytes sent via SQL*Net to client', 'bytes received via SQL*Net from client', 'SQL*Net roundtrips to/from client','execute count') "
+
+	sqlArray	=[sql_active,sql_session,sql_enqueue,sql_logfile,sql_stat]
 
 def _init_flock():
 	global fd_flk
@@ -132,21 +150,39 @@ def _destory():
 			print >>sys.stderr,"Error: "+str(e)
 			sys.exit(1)
 
-def _init_globalVar():
+def _init_pattern():
 	global spPattern,dPattern,netPattern,loadPattern
 	spPattern	=re.compile("\s+")
 	dPattern	=re.compile("\d+:")
 	netPattern	=re.compile("\s+|:[\s\t]*|\t+")
 	loadPattern	=re.compile("\s+|/")			
 
-def _init_oraEnv():
+#use sqlplus client to execute sql
+def _init_sqlplusEnv():
 	global ORACLE_HOME,SQLPLUS
-	ORACLE_HOME	= os.environ.get("ORACLE_HOME")
+	
 	SQLPLUS		= ORACLE_HOME+"/bin/sqlplus"
 	if not os.path.exists(SQLPLUS):
 		print >>sys.stderr,"Error:not exists sqlplus!"
 		sys.exit(1)
 	SQLPLUS 	= SQLPLUS + " -s / as sysdba "
+
+#use Persistent connection to execute sql 
+def _init_connEnv():
+	global sqlArray,CONN,cursorArray
+	try:
+		CONN 	= cx_Oracle.connect('/', mode=cx_Oracle.SYSDBA)
+		CONN.ping()
+	except Exception,e:
+		print >>sys.stderr,"Error:cannot connect as sysdba!"
+		sys.exit(1)
+	cursorArray=[]
+	for sql in sqlArray:
+		cur 	=CONN.cursor()
+		cursorArray.append(cur)
+
+
+	 
 
 def initEnv():
 	#int the monitor directry  
@@ -158,9 +194,11 @@ def initEnv():
 	#init the log file description
 	_init_fd()
 	#init global variables
-	_init_globalVar()
+	_init_pattern()
 	
-	_init_oraEnv()	
+	_init_sqlplusEnv()
+
+	_init_connEnv()
 	#init display class for cpu,mem,net,disk,fs and so on	
 	_init_disps()
 
@@ -270,8 +308,8 @@ def _init_disps():
 	arrDisp.append(utilDisp)
 
 	ora_domain	=['all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all']
-	ora_title	=['Act','Enq','Log','Sess','Logf','Pars','Exec','Comm','Roll','Clean','Redo','Rwrt','Rsyn','Rrst','Bget','Cget','Sort','Read','Writ','Trip','Send','Recv']
-	ora_width 	=[3,3,3,5,4,4,4,4,4,5,4,4,4,5,4,4,4,4,4,4,4,4]
+	ora_title	=['Act','Enq','Log','Sess','Arc','Hard','Exec','Comm','Roll','Clean','Redo','Rwrt','Rsyn','Rrst','Bget','Cget','Sort','Read','Writ','Trip','Send','Recv']
+	ora_width 	=[3,3,3,5,3,4,4,4,4,5,4,4,4,5,4,4,4,4,4,4,4,4]
 	ora_visible =[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]
 	ora_unit 	=[0,0,0,0,0,3,3,3,3,3,4,3,3,0,3,3,3,3,3,3,4,4]
 	ora_cut 	=[False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False]
@@ -299,17 +337,8 @@ def _mon_cpu():
 	utilDisp.calDelta()
 
 def _mon_orastat():
-	global  orastatDisp
-	sql_active	="select 'Active',count(*) from v$session where status='ACTIVE' and type='USER'"
-	sql_session ="select 'Session',count(*) from v$session"
-	sql_enqueue ="select 'Enqueue',count(*) from v$session_wait where event like 'enq:%'"
-	sql_logfile	="select 'logf',count(*) from v$log where ARCHIVED='YES' and STATUS='INACTIVE'"
-	sql_stat	="select decode(name,'logons cumulative','Log', 'user commits','Comm', 'execute count','Exec','user rollbacks','Roll', 'cleanouts and rollbacks - consistent read gets','Clean', 'redo size','Redo', 'redo writes','Rwrt', 'redo synch writes','Rsyn', 'redo synch time','Rrst', 'sorts (rows)','Sort', 'parse count (hard)','Parse', 'db block gets','Bget', 'consistent gets','Cget', 'physical read IO requests','Read', 'physical write IO requests','Writ', 'bytes sent via SQL*Net to client','Send', 'bytes received via SQL*Net from client','Recv', 'SQL*Net roundtrips to/from client','Trip'),value from v$sysstat where  name in('logons cumulative', 'user commits', 'user rollbacks', 'cleanouts and rollbacks - consistent read gets', 'redo size', 'redo writes', 'redo synch writes', 'redo synch time', 'sorts (rows)', 'parse count (hard)', 'db block gets', 'consistent gets', 'physical read IO requests', 'physical write IO requests', 'bytes sent via SQL*Net to client', 'bytes received via SQL*Net from client', 'SQL*Net roundtrips to/from client','execute count') "
-
-
-	sqlArray 	=[sql_active,sql_session,sql_enqueue,sql_logfile,sql_stat]
-
-	arrLine		= _oraClient(sqlArray)
+	global  orastatDisp,sqlArray
+	arrLine		= _oraClient2(sqlArray)
 	orastatDisp.setValue2(arrLine)
 	orastatDisp.calDelta()
 
@@ -328,6 +357,21 @@ def _oraClient(sqlArray):
 		return None	
 	except Exception,e:
 		return None
+
+def _oraClient2(sqlArray):
+	global cursorArray
+	result	= []
+	try:
+		for i in range(len(sqlArray)):
+			cursorArray[i].execute(sqlArray[i])
+			rows 	= cursorArray[i].fetchall()
+			for row in rows:
+				result.append(row)
+	except Exception,e:
+		print >>sys.stderr,"Error:execute sql!"
+		sys.exit(1)		
+	print result	
+	return result
 
 def _readLine(filePath):
 	try:
@@ -454,10 +498,7 @@ class OrastatDisplay(Display):
 		self.delta 	= []
 		statLines	= self.cur
 		for line in statLines:
-			line    =line.rstrip(" \n")
-			if line =="":
-				continue
-			[key,value] = spPattern.split(line)
+			[key,value] = line
 			if key =="Active":
 				active 	= int(value)
 			elif key =="Session":
@@ -531,11 +572,6 @@ class OrastatDisplay(Display):
 if __name__ == '__main__':
 #	try:
 #		try:
-			if len(sys.argv)>1:
-				SID	=str(sys.argv[1])
-			else:
-				print >>sys.stderr,"Error: pls input oracle SID!"
-				sys.exit(1)
 			chkEnv()
 			initEnv()
 			while(1):
