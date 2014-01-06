@@ -370,7 +370,6 @@ def _oraClient2(sqlArray):
 	except Exception,e:
 		print >>sys.stderr,"Error:execute sql!"
 		sys.exit(1)		
-	print result	
 	return result
 
 def _readLine(filePath):
