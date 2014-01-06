@@ -39,7 +39,7 @@ def chkEnv():
 		print >>sys.stderr,"Error: Linux kernel 2.6 or later required!"
 		sys.exit(1)
 
-def _initmysqlenv():
+def _initmysqlEnv():
 	global MYSQL_CORE,MYSQL_PLUS,MYSQL_RAW,MYSQL_FLK,MYSQLCLIENT
 	MYSQL_CORE 	= MYSQL_CORE+'_'+PORT
 	MYSQL_PLUS	= MYSQL_PLUS+'_'+PORT
@@ -133,7 +133,7 @@ def _destory():
 			print >>sys.stderr,"Error: "+str(e)
 			sys.exit(1)
 
-def _init_globalVar():
+def _init_pattern():
 	global spPattern,dPattern,netPattern,loadPattern
 	spPattern	=re.compile("\s+")
 	dPattern	=re.compile("\d+:")
@@ -146,13 +146,13 @@ def initEnv():
 	#int the monitor directry  
 	_init_path(DIRMON)
 	#append the port to the filename
-	_initmysqlenv()
+	_initmysqlEnv()
 	#get excusive lock
 	_init_flock()
 	#init the log file description
 	_init_fd()
 	#calculate the cpu count
-	_init_globalVar()
+	_init_pattern()
 	
 	#init display class for cpu,mem,net,disk,fs and so on	
 	_init_disps()
@@ -162,6 +162,9 @@ def loopMon():
 	_mon_load()
 	_mon_cpu()
 	_mon_mysqlstat()
+	_mon_innodb()
+
+
 def loopDisp():
 	global rawValue,dispValue
 	for disp in arrDisp:
@@ -262,7 +265,19 @@ def _init_disps():
 
 	utilDisp	= UtilDisplay(['all','all','all','all','all'],["us","sy","io","hi","si"],[2,2,2,2,2],[3,3,3,3,3],[0,0,0,0,0],[False,False,False,False,False],["/","/",'/','/','|'],5)
 	arrDisp.append(utilDisp)
-	mysqlStatDisp =MysqlStatDisplay(['all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all'],['run','conn','log','sel','ins','upd','del','Bcomm','Gcomm','Ifsyn','Iredo','read','logic','hit','writ','Rsel','Rins','Rupd','Rdel','recv','send'],[4,4,4,4,4,4,4,5,5,5,5,4,5,5,4,4,4,4,4,4,4],[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],[3,3,3,3,3,3,3,3,3,3,4,3,3,0,3,3,3,3,3,4,4],[False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False],[" "," ","|", " "," "," ","|"," ","|"," ","|"," "," "," ","|"," "," "," ","|"," ","|"],21)
+
+	ora_domain	=['all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all','all']
+	ora_title	=['run','conn','log','sel','ins','upd','del','Bcom','Gcom','Fsyc','Redo','read','logic','hit','writ','Rsel','Rins','Rupd','Rdel','recv','send']
+	ora_width 	=[4,4,4,4,4,4,4,4,4,4,4,4,5,5,4,4,4,4,4,4,4]
+	ora_visible =[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]
+	ora_unit 	=[3,3,3,3,3,3,3,3,3,3,4,3,3,0,3,3,3,3,3,4,4]
+	ora_cut 	=[False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False]
+	ora_delim 	=[" "," ","|", " "," "," ","|"," ","|"," ","|"," "," "," ","|"," "," "," ","|"," ","|"]
+
+	mysqlStatDisp =MysqlStatDisplay(ora_domain,ora_title,ora_width,ora_visible,ora_unit,ora_cut,ora_delim,21)
+
+	
+
 	arrDisp.append(mysqlStatDisp)
 
 def _mon_time():
@@ -293,7 +308,10 @@ def _mon_mysqlstat():
 		sys.exit(1)
 	mysqlStatDisp.setValue2(arrLine)
 	mysqlStatDisp.calDelta()
-	
+
+def _mon_innodb():
+	global innodbDisp
+	sql_command	=""" 'show innodb engine status' """	
 def _readLine(filePath):
 	try:
 		fh   = open(filePath,'r')
@@ -350,7 +368,7 @@ class Display:
 		self.width      = width
 		#visible 0:core,raw,plus, 1:raw,plus 2:plus 3 core,raw
 		self.visible    = visible
-		#unit 0:primitve    1:1000 3bytes  2:1024 3bytes,3:10000  4bytes 4:10000 4bytes,k/m/g
+		#unit 0:primitve    [3bytes]1:1000 2:1024 	[4bytes]3:10000  4:10000, k/m/g [5bytes]5:100000,6:100000,k/m/g 
 		self.unit       = unit
 		#cut the value by width
 		self.cut        = cut
